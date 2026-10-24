@@ -1,5 +1,6 @@
 import { useState } from 'preact/hooks';
 import { GitHubClient, GitHubError, describeError, formatReset, type RateLimit, type RepoInfo } from '../api/github';
+import { installUrl } from '../auth/config';
 import { parseRepo } from '../storage/config';
 import { DEFAULT_EXCLUDES } from '../storage/types';
 import { useApp } from './app';
@@ -19,6 +20,7 @@ export function SettingsPage({ firstRun }: { firstRun: boolean }) {
   const [missingRepo, setMissingRepo] = useState(false);
   const [publicRepo, setPublicRepo] = useState<RepoInfo | null>(null);
   const [typed, setTyped] = useState('');
+  const [advOpen, setAdvOpen] = useState(!app.oauth.enabled || !!app.token);
 
   const parsed = parseRepo(repo);
   const mkClient = () => new GitHubClient({ token: token.trim(), owner: parsed!.owner, repo: parsed!.repo });
@@ -37,6 +39,12 @@ export function SettingsPage({ firstRun }: { firstRun: boolean }) {
     setMsg(null);
     setMissingRepo(false);
     setPublicRepo(null);
+    if (!token.trim() && app.oauth.signedIn) {
+      // Signed in with GitHub: just save the form and re-check the storage repo with that sign-in.
+      persist();
+      await app.recheck();
+      return setMsg({ kind: 'ok', text: 'Settings saved.' });
+    }
     if (!token.trim()) return setMsg({ kind: 'error', text: 'Paste your fine-grained token first.' });
     if (!parsed) return setMsg({ kind: 'error', text: 'Enter the repository as owner/name, e.g. alice/fsave-storage.' });
     setBusy(true);
@@ -93,6 +101,8 @@ export function SettingsPage({ firstRun }: { firstRun: boolean }) {
       <h1>{firstRun ? 'Welcome — connect your storage' : 'Settings'}</h1>
       {firstRun && <p>fsave-web stores your files in a <strong>private GitHub repository you own</strong>. Connect one to get started.</p>}
 
+      {app.oauth.enabled && <SignInCard />}
+
       <form
         class="card"
         onSubmit={(e) => {
@@ -100,7 +110,30 @@ export function SettingsPage({ firstRun }: { firstRun: boolean }) {
           void test();
         }}
       >
-        <h2>1. Access token</h2>
+        <h2>Storage repository</h2>
+        <label>
+          Repository (owner/name)
+          <input value={repo} onInput={(e) => setRepo((e.target as HTMLInputElement).value)} placeholder="your-name/fsave-storage" spellcheck={false} />
+        </label>
+
+        <h2>Preferences</h2>
+        <label>
+          Theme
+          <select value={theme} onChange={(e) => setTheme((e.target as HTMLSelectElement).value as typeof theme)}>
+            <option value="system">Match system</option>
+            <option value="light">Light</option>
+            <option value="dark">Dark</option>
+          </select>
+        </label>
+        <label>
+          Default exclude patterns (one per line)
+          <textarea rows={5} value={excludes} onInput={(e) => setExcludes((e.target as HTMLTextAreaElement).value)} spellcheck={false} />
+        </label>
+        <button type="button" class="link" onClick={() => setExcludes(DEFAULT_EXCLUDES.join('\n'))}>Reset excludes to defaults</button>
+
+        <details open={advOpen} onToggle={(e) => setAdvOpen((e.target as HTMLDetailsElement).open)}>
+          <summary><strong>Advanced: use a pasted access token instead</strong></summary>
+        <h2>Access token</h2>
         <details>
           <summary>How to create the token (step by step)</summary>
           <ol>
@@ -128,26 +161,7 @@ export function SettingsPage({ firstRun }: { firstRun: boolean }) {
           </p>
         )}
 
-        <h2>2. Storage repository</h2>
-        <label>
-          Repository (owner/name)
-          <input value={repo} onInput={(e) => setRepo((e.target as HTMLInputElement).value)} placeholder="your-name/fsave-storage" spellcheck={false} />
-        </label>
-
-        <h2>3. Preferences</h2>
-        <label>
-          Theme
-          <select value={theme} onChange={(e) => setTheme((e.target as HTMLSelectElement).value as typeof theme)}>
-            <option value="system">Match system</option>
-            <option value="light">Light</option>
-            <option value="dark">Dark</option>
-          </select>
-        </label>
-        <label>
-          Default exclude patterns (one per line)
-          <textarea rows={5} value={excludes} onInput={(e) => setExcludes((e.target as HTMLTextAreaElement).value)} spellcheck={false} />
-        </label>
-        <button type="button" class="link" onClick={() => setExcludes(DEFAULT_EXCLUDES.join('\n'))}>Reset excludes to defaults</button>
+        </details>
 
         <div class="actions">
           <button type="submit" class="primary" disabled={busy}>{busy ? 'Working…' : 'Test connection & save'}</button>
@@ -183,5 +197,73 @@ export function SettingsPage({ firstRun }: { firstRun: boolean }) {
       )}
       <p class="muted">The token is sent only to api.github.com and uploads.github.com. It is never logged or placed in a URL.</p>
     </section>
+  );
+}
+
+/** "Sign in with GitHub" status and actions (shown when the build has OAuth settings). */
+function SignInCard() {
+  const app = useApp();
+  const o = app.oauth;
+  return (
+    <div class="card">
+      <h2>Sign in with GitHub</h2>
+      {o.expired && !o.signedIn && <p role="alert" class="notice error">Your GitHub sign-in expired. Please sign in again.</p>}
+      {!o.signedIn && (
+        <>
+          {o.state === 'error' && <p role="alert" class="notice error">{o.message}</p>}
+          <p>No tokens to create. GitHub asks you to approve fsave-web, which can only reach the repository you choose.</p>
+          <div class="actions">
+            <button type="button" class="primary" onClick={app.signIn}>Sign in with GitHub</button>
+          </div>
+        </>
+      )}
+      {o.signedIn && (
+        <>
+          {o.state === 'checking' && <p role="status">Checking your storage repository…</p>}
+          {o.state === 'ok' && (
+            <p role="status" class="notice ok">
+              ✓ Signed in. Connected to <code>{app.settings.repo}</code>.{' '}
+              <button type="button" class="link" onClick={app.leaveSettings}>Go to my saves →</button>
+            </p>
+          )}
+          {o.state === 'needs-install' && (
+            <>
+              <p role="alert" class="notice error">
+                You're signed in, but fsave-web doesn't have access to <code>{o.repo}</code> yet.
+              </p>
+              <ol>
+                <li>Click <strong>Choose the storage repository</strong> below (opens GitHub).</li>
+                <li>Under <em>Repository access</em> pick <strong>Only select repositories</strong>, then choose just your storage repo.</li>
+                <li>Click <strong>Install</strong> (or <strong>Save</strong>). You'll come back here automatically.</li>
+              </ol>
+              <div class="actions">
+                <a class="primary button" href={installUrl()}>Choose the storage repository</a>
+                <button type="button" onClick={() => void app.recheck()}>I've done this — check again</button>
+              </div>
+            </>
+          )}
+          {o.state === 'public' && (
+            <p role="alert" class="notice error">
+              <code>{o.repo}</code> is PUBLIC, so anyone could read your saves. Make it private on GitHub, then check again.{' '}
+              <button type="button" class="link" onClick={() => void app.recheck()}>Check again</button>
+            </p>
+          )}
+          {o.state === 'no-write' && (
+            <p role="alert" class="notice error">
+              Signed in, but fsave-web can't write to <code>{o.repo}</code>. Re-open the GitHub App settings and allow <em>Contents: Read and write</em>.{' '}
+              <button type="button" class="link" onClick={() => void app.recheck()}>Check again</button>
+            </p>
+          )}
+          {o.state === 'error' && (
+            <p role="alert" class="notice error">
+              {o.message} <button type="button" class="link" onClick={() => void app.recheck()}>Try again</button>
+            </p>
+          )}
+          <div class="actions">
+            <button type="button" onClick={app.signOut}>Sign out</button>
+          </div>
+        </>
+      )}
+    </div>
   );
 }

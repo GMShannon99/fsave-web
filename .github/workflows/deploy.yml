@@ -30,6 +30,10 @@ jobs:
         env:
           # https://<user>.github.io/<repo>/ -> assets must be served from /<repo>/
           VITE_BASE: /${{ github.event.repository.name }}/
+          # Optional "Sign in with GitHub" (public values; set under Settings -> Secrets and variables -> Actions -> Variables).
+          VITE_GITHUB_CLIENT_ID: ${{ vars.VITE_GITHUB_CLIENT_ID }}
+          VITE_GITHUB_APP_SLUG: ${{ vars.VITE_GITHUB_APP_SLUG }}
+          VITE_OAUTH_WORKER_URL: ${{ vars.VITE_OAUTH_WORKER_URL }}
       - uses: actions/upload-pages-artifact@v3
         with:
           path: dist

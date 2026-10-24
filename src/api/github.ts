@@ -64,7 +64,10 @@ export interface AssetInfo {
 }
 
 export interface ClientOptions {
-  token: string;
+  /** A fixed token (pasted personal access token). Ignored when `getToken` is given. */
+  token?: string;
+  /** Supplies a fresh token for each request (OAuth sign-in). `force` means the last one was rejected. */
+  getToken?: (force?: boolean) => Promise<string>;
   owner: string;
   repo: string;
   fetchImpl?: typeof fetch;
@@ -162,12 +165,14 @@ export class GitHubClient {
   readonly repo: string;
   lastRateLimit?: { remaining: number; limit: number; reset: Date };
   private token: string;
+  private getToken?: (force?: boolean) => Promise<string>;
   private fetchImpl: typeof fetch;
   private sleep: (ms: number) => Promise<void>;
   private maxAutoWaitMs: number;
 
   constructor(o: ClientOptions) {
-    this.token = o.token;
+    this.token = o.token ?? '';
+    this.getToken = o.getToken;
     this.owner = o.owner;
     this.repo = o.repo;
     this.fetchImpl = o.fetchImpl ?? ((...a) => fetch(...a));
@@ -179,9 +184,13 @@ export class GitHubClient {
     return `/repos/${this.owner}/${this.repo}`;
   }
 
-  private headers(accept?: string, json = false): Record<string, string> {
+  private async currentToken(force = false): Promise<string> {
+    return this.getToken ? this.getToken(force) : this.token;
+  }
+
+  private headers(token: string, accept?: string, json = false): Record<string, string> {
     const h: Record<string, string> = {
-      Authorization: `Bearer ${this.token}`,
+      Authorization: `Bearer ${token}`,
       Accept: accept ?? 'application/vnd.github+json',
       'X-GitHub-Api-Version': VERSION,
     };
@@ -198,12 +207,14 @@ export class GitHubClient {
 
   async request<T = unknown>(method: string, path: string, o: ReqOpts = {}): Promise<T> {
     const url = path.startsWith('http') ? path : API + path;
+    let reauthed = false;
+    let token = await this.currentToken();
     for (let attempt = 0; ; attempt++) {
       let res: Response;
       try {
         res = await this.fetchImpl(url, {
           method,
-          headers: this.headers(o.accept, o.body !== undefined),
+          headers: this.headers(token, o.accept, o.body !== undefined),
           body: o.body === undefined ? undefined : JSON.stringify(o.body),
           signal: o.signal,
         });
@@ -223,6 +234,12 @@ export class GitHubClient {
           default:
             return (res.status === 204 ? undefined : await res.json()) as T;
         }
+      }
+      // A signed-in token can be revoked/expired early: refresh once and retry before giving up.
+      if (res.status === 401 && this.getToken && !reauthed) {
+        reauthed = true;
+        token = await this.currentToken(true);
+        continue;
       }
       const err = errorFromResponse(res.status, (n) => res.headers.get(n), await res.text().catch(() => ''));
       if (err.kind === 'rate-limit' && err.resetAt && attempt < 2) {
@@ -340,14 +357,24 @@ export class GitHubClient {
   }
 
   /** Uploads a release asset; uses XHR when available so upload progress can be reported. */
-  uploadAsset(
+  async uploadAsset(
     releaseId: number,
     name: string,
     data: Blob,
     o: { signal?: AbortSignal; onProgress?: (fraction: number) => void } = {},
   ): Promise<AssetInfo> {
+    return this.sendAsset(await this.currentToken(), releaseId, name, data, o);
+  }
+
+  private sendAsset(
+    token: string,
+    releaseId: number,
+    name: string,
+    data: Blob,
+    o: { signal?: AbortSignal; onProgress?: (fraction: number) => void },
+  ): Promise<AssetInfo> {
     const url = `${UPLOADS}${this.base}/releases/${releaseId}/assets?name=${encodeURIComponent(name)}`;
-    const h = { ...this.headers(), 'Content-Type': 'application/octet-stream' };
+    const h = { ...this.headers(token), 'Content-Type': 'application/octet-stream' };
     if (typeof XMLHttpRequest === 'undefined') {
       return this.fetchImpl(url, { method: 'POST', headers: h, body: data, signal: o.signal }).then(
         async (res) => {

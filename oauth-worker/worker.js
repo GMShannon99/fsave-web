@@ -1,7 +1,13 @@
-// Optional Cloudflare Worker: exchanges a GitHub OAuth `code` for an access token, because GitHub's
-// token endpoint has no browser CORS and needs the client secret. See README.md in this folder.
+// Cloudflare Worker for "Sign in with GitHub" (GitHub App user authorization).
+// GitHub's token endpoint has no browser CORS and needs the client secret, so the browser asks this
+// worker to do the exchange. See README.md in this folder.
 //
-// Secrets/vars (wrangler): GITHUB_CLIENT_ID, GITHUB_CLIENT_SECRET (secret), ALLOWED_ORIGIN (e.g. https://you.github.io)
+//   POST /token    { "code": "<code from GitHub>" }          -> { access_token, expires_in, refresh_token, refresh_token_expires_in }
+//   POST /refresh  { "refresh_token": "<refresh token>" }    -> same shape
+//
+// Vars/secrets (wrangler): GITHUB_CLIENT_ID, GITHUB_CLIENT_SECRET (secret), ALLOWED_ORIGIN (e.g. https://you.github.io)
+
+const TOKEN_URL = 'https://github.com/login/oauth/access_token';
 
 export default {
   async fetch(request, env) {
@@ -15,24 +21,40 @@ export default {
     if (request.method === 'OPTIONS') return new Response(null, { status: 204, headers: cors });
     if (request.method !== 'POST' || origin !== env.ALLOWED_ORIGIN) return new Response('Forbidden', { status: 403, headers: cors });
 
-    let code;
+    const path = new URL(request.url).pathname.replace(/\/+$/, '');
+    const isRefresh = path.endsWith('/refresh');
+
+    let body;
     try {
-      ({ code } = await request.json());
+      body = await request.json();
     } catch {
       return new Response('Bad request', { status: 400, headers: cors });
     }
-    if (typeof code !== 'string' || !code) return new Response('Missing code', { status: 400, headers: cors });
+    const field = isRefresh ? body?.refresh_token : body?.code;
+    if (typeof field !== 'string' || !field) return new Response(isRefresh ? 'Missing refresh_token' : 'Missing code', { status: 400, headers: cors });
 
-    const res = await fetch('https://github.com/login/oauth/access_token', {
-      method: 'POST',
-      headers: { Accept: 'application/json', 'Content-Type': 'application/json' },
-      body: JSON.stringify({ client_id: env.GITHUB_CLIENT_ID, client_secret: env.GITHUB_CLIENT_SECRET, code }),
-    });
-    const data = await res.json();
-    // Return only the token (or the error); never echo the client secret.
-    return new Response(JSON.stringify(data.access_token ? { access_token: data.access_token } : { error: data.error ?? 'exchange_failed' }), {
-      status: data.access_token ? 200 : 400,
-      headers: { ...cors, 'Content-Type': 'application/json' },
-    });
+    const params = isRefresh
+      ? { grant_type: 'refresh_token', refresh_token: field }
+      : { code: field };
+    let data;
+    try {
+      const res = await fetch(TOKEN_URL, {
+        method: 'POST',
+        headers: { Accept: 'application/json', 'Content-Type': 'application/json' },
+        body: JSON.stringify({ client_id: env.GITHUB_CLIENT_ID, client_secret: env.GITHUB_CLIENT_SECRET, ...params }),
+      });
+      data = await res.json();
+    } catch {
+      return json({ error: 'upstream_unreachable' }, 502, cors);
+    }
+    // Return only token fields (or the error code); never echo the client secret or GitHub's raw reply.
+    if (!data?.access_token) return json({ error: data?.error ?? 'exchange_failed' }, 400, cors);
+    const out = { access_token: data.access_token };
+    for (const k of ['expires_in', 'refresh_token', 'refresh_token_expires_in']) if (data[k] !== undefined) out[k] = data[k];
+    return json(out, 200, cors);
   },
 };
+
+function json(obj, status, cors) {
+  return new Response(JSON.stringify(obj), { status, headers: { ...cors, 'Content-Type': 'application/json' } });
+}

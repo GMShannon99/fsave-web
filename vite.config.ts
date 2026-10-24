@@ -1,6 +1,15 @@
 import { defineConfig, type Plugin } from 'vite';
 import preact from '@preact/preset-vite';
 
+// The sign-in worker (optional) must be reachable from the page; allow only its origin.
+const workerOrigin = (() => {
+  try {
+    return process.env.VITE_OAUTH_WORKER_URL ? new URL(process.env.VITE_OAUTH_WORKER_URL).origin : '';
+  } catch {
+    return '';
+  }
+})();
+
 const CSP = [
   "default-src 'none'",
   "script-src 'self'",
@@ -8,7 +17,7 @@ const CSP = [
   "img-src 'self' data:",
   "font-src 'self'",
   // api/uploads: GitHub REST. githubusercontent: GitHub's signed redirect targets for release-asset downloads.
-  "connect-src https://api.github.com https://uploads.github.com https://*.githubusercontent.com",
+  `connect-src https://api.github.com https://uploads.github.com https://*.githubusercontent.com${workerOrigin ? ` ${workerOrigin}` : ''}`,
   "worker-src 'self' blob:",
   "base-uri 'none'",
   "form-action 'none'",

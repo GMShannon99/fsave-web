@@ -2,10 +2,10 @@
 
 A static web app (hosted on GitHub Pages) that saves files and folders from your computer into a **private GitHub repository you own**, then lets you browse, retrieve and download them from any device — individual files, or a whole save as a zip.
 
-There is no server. The browser talks directly to the GitHub REST API using a fine-grained personal access token you paste in.
+There is no server. The browser talks directly to the GitHub REST API, signed in either with **Sign in with GitHub** (a GitHub App limited to your storage repo, via a tiny optional Cloudflare Worker) or with a fine-grained personal access token you paste in.
 
 ## Contents
-- [Setup](#setup) · [Creating the token](#creating-the-token) · [How storage is laid out](#how-storage-is-laid-out) · [Limits](#limits)
+- [Setup](#setup) · [Sign in with GitHub](#sign-in-with-github) · [Creating the token](#creating-the-token) · [How storage is laid out](#how-storage-is-laid-out) · [Limits](#limits)
 - [Security notes](#security-notes) · [Deleting and purging history](#deleting-and-purging-history) · [Walkthrough](#walkthrough) · [Development](#development)
 
 ## Setup
@@ -14,13 +14,23 @@ There is no server. The browser talks directly to the GitHub REST API using a fi
 2. **Push this project** to a GitHub repo (the *app* repo — can be public or private; it contains no data). Use the `main` branch.
 3. **Enable GitHub Pages:** app repo → *Settings* → *Pages* → *Build and deployment* → **Source: GitHub Actions**. (Private app repos need a plan that supports Pages for private repos.)
 4. Push to `main`. `.github/workflows/deploy.yml` runs the unit tests, builds with `VITE_BASE=/<repo-name>/` and deploys. Your site appears at `https://<you>.github.io/<repo-name>/`.
-5. Open the site, paste your token and the storage repo name, and click **Test connection & save**.
+5. Open the site and click **Sign in with GitHub** (after the one-time [setup below](#sign-in-with-github)), or open *Settings → Advanced* and paste a token plus the storage repo name, then click **Test connection & save**.
 
 If the storage repo doesn't exist, *Test connection* offers to create it as private (needs a token allowed to create repositories). A **public** repo is refused unless you type its full name to confirm.
 
+## Sign in with GitHub
+
+No token to create or paste. One-time setup (GitHub App + Cloudflare Worker + three repository variables) is in [`oauth-worker/README.md`](oauth-worker/README.md), click by click.
+
+- **Least access:** a GitHub App can only reach repositories you select when installing it (just the storage repo), with *Contents: Read and write* only.
+- **First sign-in:** the app connects to the storage repo (the one in Settings, otherwise `<you>/fsave-storage`), checks it is private and writable, and adds an initial README if it is completely empty. If the app isn't installed on that repo yet, it shows a **Choose the storage repository** button that opens GitHub's install page. A GitHub App can't create a repo it has no access to, so the repo itself must already exist.
+- **Expiry:** access tokens last 8 hours and are refreshed automatically (the refresh token lasts about 6 months and rotates on each use). If refresh fails, you're signed out and the **Sign in with GitHub** button reappears.
+- **Sign out** (Settings) deletes the stored session from this browser. To fully revoke, remove the app at GitHub → Settings → Applications.
+- Without the three build variables the button is hidden and only the pasted-token form is shown.
+
 ## Creating the token
 
-Use a **fine-grained** token limited to the storage repo only:
+This is the fallback (Settings → Advanced). Use a **fine-grained** token limited to the storage repo only:
 
 1. Go to <https://github.com/settings/personal-access-tokens/new>.
 2. **Token name:** `fsave-web`. **Expiration:** pick something sensible (e.g. 90 days).
@@ -62,6 +72,7 @@ Practical notes: files near 50 MB are base64-encoded for upload (~67 MB request)
 
 ## Security notes
 
+- The sign-in session (access + refresh token) is kept in this browser's `localStorage` so you stay signed in; sign out removes it. The client secret lives only in the Cloudflare Worker; the page never sees it. The worker answers only your Pages origin, and the sign-in `state` is checked to block forged redirects.
 - The token is sent **only** to `api.github.com` and `uploads.github.com`. It is never logged, never put in a URL, and never included in error messages. Share links contain only the save id and repo name.
 - Release-asset downloads are redirected by GitHub to its own signed `*.githubusercontent.com` URL; the browser doesn't forward your token there. That domain is allowed in the CSP for this reason.
 - A strict Content-Security-Policy meta tag (`default-src 'none'`, scripts/styles/workers from `'self'` only, `connect-src` limited to GitHub) is injected at build time. No analytics, fonts, or CDNs.
@@ -101,6 +112,6 @@ npm run e2e          # Playwright save -> browse -> download flow against a mock
 npm run build        # type-check + production bundle in dist/
 ```
 
-Layout: `src/api/github.ts` (REST client, errors, rate limiting) · `src/storage/` (manifest, excludes, paths, hashing, commit builder, save/delete, zip) · `src/ui/` (Preact screens) · `src/workers/hash.ts` (hashing worker) · `tests/support/fakeGithub.ts` (in-memory GitHub used by both test suites) · `oauth-worker/` (optional).
+Layout: `src/api/github.ts` (REST client, errors, rate limiting) · `src/storage/` (manifest, excludes, paths, hashing, commit builder, save/delete, zip) · `src/ui/` (Preact screens) · `src/workers/hash.ts` (hashing worker) · `tests/support/fakeGithub.ts` (in-memory GitHub used by both test suites) · `src/auth/` (sign-in session, refresh, repo connect) · `oauth-worker/` (optional sign-in worker).
 
 Browsers: current Chrome, Edge, Firefox, Safari. Folder picking uses `<input webkitdirectory>` and is hidden on phones/tablets (drag-and-drop of folders also works on desktop).

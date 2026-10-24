@@ -1,6 +1,9 @@
 import { createContext, type ComponentChildren } from 'preact';
-import { useContext, useEffect, useMemo, useState } from 'preact/hooks';
-import { GitHubClient } from '../api/github';
+import { useContext, useEffect, useMemo, useRef, useState } from 'preact/hooks';
+import { GitHubClient, describeError } from '../api/github';
+import { authConfig, oauthEnabled } from '../auth/config';
+import { connectStorage } from '../auth/connect';
+import { AuthManager, authorizeUrl, newState, parseCallback, rememberState, type Session } from '../auth/session';
 import { loadSettings, loadToken, parseRepo, saveSettings, saveToken, type Settings } from '../storage/config';
 import { Browse } from './Browse';
 import { Detail } from './Detail';
@@ -15,11 +18,23 @@ export interface Ctx {
   branch: string;
   updateSettings(patch: Partial<Settings>): void;
   setToken(token: string, remember: boolean): void;
+  /** "Sign in with GitHub" state; `enabled` is false when the build has no OAuth settings. */
+  oauth: OAuthState & { enabled: boolean; signedIn: boolean; expired: boolean };
+  signIn(): void;
+  signOut(): void;
+  /** Re-checks the storage repo (e.g. after installing the GitHub App on it). */
+  recheck(): Promise<void>;
   /** Leaves the (first-run) settings screen for the saves list. */
   leaveSettings(): void;
 }
 const AppCtx = createContext<Ctx>(null as unknown as Ctx);
 export const useApp = () => useContext(AppCtx);
+
+export interface OAuthState {
+  state: 'idle' | 'checking' | 'ok' | 'needs-install' | 'public' | 'no-write' | 'error';
+  message?: string;
+  repo?: string;
+}
 
 export interface Route {
   page: 'browse' | 'new' | 'save' | 'settings';
@@ -54,6 +69,67 @@ export function App() {
   const route = useRoute();
   const [settings, setSettings] = useState(loadSettings);
   const [tok, setTok] = useState(loadToken);
+  const [expired, setExpired] = useState(false);
+  const settingsRef = useRef(settings);
+  settingsRef.current = settings;
+  const [auth] = useState(() => {
+    if (!oauthEnabled) return null;
+    return new AuthManager({
+      workerUrl: authConfig.workerUrl,
+      storage: localStorage,
+      onChange: (s, wasExpired) => {
+        setSession(s);
+        if (wasExpired) setExpired(true);
+        if (!s) setOauth({ state: 'idle' });
+      },
+    });
+  });
+  const [session, setSession] = useState<Session | null>(() => auth?.session ?? null);
+  // A saved sign-in for an already-configured repo is trusted right away; otherwise verify it first.
+  const [oauth, setOauth] = useState<OAuthState>(() =>
+    !auth?.session ? { state: 'idle' } : { state: settings.repo && settings.branch ? 'ok' : 'checking' },
+  );
+  const patchSettings = (patch: Partial<Settings>) => {
+    const next = { ...settingsRef.current, ...patch };
+    settingsRef.current = next;
+    saveSettings(next);
+    setSettings(next);
+  };
+
+  async function recheck() {
+    if (!auth) return;
+    setOauth({ state: 'checking' });
+    try {
+      const cur = settingsRef.current;
+      const r = await connectStorage({ getToken: (f) => auth.getToken(f), repo: parseRepo(cur.repo), publicConfirmed: cur.publicConfirmed });
+      if (r.status === 'connected') {
+        patchSettings({ repo: r.info.full_name, branch: r.info.default_branch });
+        setOauth({ state: 'ok' });
+      } else if (r.status === 'needs-install') setOauth({ state: 'needs-install', repo: r.repo });
+      else setOauth({ state: r.status, repo: r.info.full_name });
+    } catch (e) {
+      setOauth({ state: 'error', message: describeError(e) });
+    }
+  }
+
+  // On load: finish a GitHub redirect (?code=…), or verify an existing sign-in.
+  useEffect(() => {
+    if (!auth) return;
+    const q = new URLSearchParams(location.search);
+    const cb = parseCallback(location.search, sessionStorage);
+    const justInstalled = q.has('installation_id') || q.has('setup_action');
+    if (cb.kind !== 'none' || justInstalled) history.replaceState(null, '', location.pathname + location.hash);
+    if (cb.kind === 'error') return setOauth({ state: 'error', message: cb.message });
+    if (cb.kind === 'code') {
+      setOauth({ state: 'checking' });
+      setExpired(false);
+      auth.exchangeCode(cb.code).then(recheck, (e) => setOauth({ state: 'error', message: describeError(e) }));
+    } else if (auth.session) {
+      const cur = settingsRef.current;
+      if (justInstalled || !cur.repo || !cur.branch) void recheck();
+      else setOauth({ state: 'ok' });
+    }
+  }, []);
   // Keep the first-run settings screen (and its success message) up until the user navigates away.
   const [sticky, setSticky] = useState(false);
   useEffect(() => setSticky(false), [route]);
@@ -80,17 +156,27 @@ export function App() {
 
   const ctx = useMemo<Ctx>(() => {
     const r = parseRepo(settings.repo);
+    const signedIn = !!(auth && session);
+    const oauthClient =
+      auth && session && r && oauth.state === 'ok' ? new GitHubClient({ getToken: (f) => auth.getToken(f), owner: r.owner, repo: r.repo }) : null;
     return {
       settings,
       token: tok.token,
       remembered: tok.remembered,
-      client: r && tok.token ? new GitHubClient({ token: tok.token, owner: r.owner, repo: r.repo }) : null,
-      branch: settings.branch || 'main',
-      updateSettings(patch) {
-        const next = { ...settings, ...patch };
-        saveSettings(next);
-        setSettings(next);
+      client: oauthClient ?? (r && tok.token ? new GitHubClient({ token: tok.token, owner: r.owner, repo: r.repo }) : null),
+      oauth: { ...oauth, enabled: !!auth, signedIn, expired },
+      signIn() {
+        const st = newState();
+        rememberState(sessionStorage, st);
+        location.assign(authorizeUrl(authConfig.clientId, st));
       },
+      signOut() {
+        auth?.signOut();
+        setExpired(false);
+      },
+      recheck,
+      branch: settings.branch || 'main',
+      updateSettings: patchSettings,
       leaveSettings() {
         setSticky(false);
         if (location.hash === '#/' || location.hash === '') window.dispatchEvent(new HashChangeEvent('hashchange'));
@@ -101,7 +187,7 @@ export function App() {
         setTok({ token, remembered: remember && !!token });
       },
     };
-  }, [settings, tok]);
+  }, [settings, tok, session, oauth, expired]);
 
   const configured = !!ctx.client;
   useEffect(() => {

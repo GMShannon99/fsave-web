@@ -1,23 +1,73 @@
-# Optional: "Sign in with GitHub" worker
+# "Sign in with GitHub" worker
 
-**Not required.** fsave-web works with a pasted fine-grained token. This worker exists for people who want a real OAuth sign-in instead. GitHub Pages can't keep a client secret and GitHub's token endpoint has no browser CORS, so a tiny proxy is needed.
+Lets fsave-web offer a **Sign in with GitHub** button instead of pasting a token. It is optional: without it the app falls back to the pasted-token form (Settings → Advanced).
 
-> **Status:** the worker (`worker.js`) is provided and documented, but the app's UI does **not** yet have a "Sign in with GitHub" button wired to it. OAuth-app tokens are also coarser than a fine-grained token (the `repo` scope grants access to *all* your repos), which is why the pasted token is the default.
+## Why a worker, and why a GitHub App
+- GitHub Pages can't keep a secret, and GitHub's token endpoint can't be called from a browser. This tiny Cloudflare Worker holds the **client secret** and swaps GitHub's one-time `code` for tokens.
+- fsave-web uses a **GitHub App** (not an OAuth App). A GitHub App can only reach the repositories you select when you install it — just the storage repo — whereas an OAuth App's `repo` scope reaches *all* your repos.
+- GitHub App user tokens **expire after 8 hours** and come with a refresh token (valid ~6 months). The app refreshes them quietly through this worker. If the refresh token expires or is revoked, the sign-in button comes back.
+- The worker never stores anything and only answers requests whose `Origin` is your Pages site.
 
-## What it does
-`POST { "code": "<oauth code>" }` → exchanges it with GitHub using the secret → returns `{ "access_token": "…" }`. It only answers requests whose `Origin` equals `ALLOWED_ORIGIN`.
+## API
+| Request | Body | Reply |
+|---|---|---|
+| `POST /token` | `{ "code": "…" }` | `{ access_token, expires_in, refresh_token, refresh_token_expires_in }` |
+| `POST /refresh` | `{ "refresh_token": "…" }` | same |
 
-## Deploy
-1. Create a GitHub OAuth App (Settings → Developer settings → OAuth Apps). Homepage = your Pages URL; callback URL = your Pages URL.
-2. `npm i -g wrangler && wrangler login`
-3. In this folder create `wrangler.toml`:
-   ```toml
-   name = "fsave-oauth"
-   main = "worker.js"
-   compatibility_date = "2024-01-01"
-   [vars]
-   GITHUB_CLIENT_ID = "<client id>"
-   ALLOWED_ORIGIN = "https://<you>.github.io"
+Errors come back as `{ "error": "<code>" }`. The client secret is never returned.
+
+## One-time setup (about 20 minutes)
+
+### Part 1 — Register the GitHub App
+1. Sign in at <https://github.com>. Click your **profile picture** (top right) → **Settings**.
+2. Scroll the left menu to the bottom → **Developer settings** → **GitHub Apps** → **New GitHub App**.
+3. Fill in:
+   - **GitHub App name:** something unique, e.g. `fsave-web-gmshannon99`. (If taken, add digits. The name becomes the "slug" in the app's URL — note it.)
+   - **Homepage URL:** `https://gmshannon99.github.io/fsave-web/`
+   - **Callback URL:** `https://gmshannon99.github.io/fsave-web/`
+   - **Expire user authorization tokens:** leave **ticked**.
+   - **Request user authorization (OAuth) during installation:** leave **unticked**.
+   - **Setup URL:** `https://gmshannon99.github.io/fsave-web/` and tick **Redirect on update**.
+   - **Webhook → Active:** **untick** it.
+4. **Repository permissions → Contents → Read and write.** (Leave everything else at "No access"; *Metadata: Read* is added automatically.)
+5. **Where can this GitHub App be installed?** → **Only on this account**.
+6. Click **Create GitHub App**.
+7. On the app's page, copy the **Client ID** (starts with `Iv`) and the app's **slug** (the last part of the page's URL, `github.com/apps/<slug>`).
+8. Scroll to **Client secrets** → **Generate a new client secret**. **Copy it now** — GitHub shows it only once. Keep it private (never paste it into chat, code or the website).
+
+### Part 2 — Install the App on the storage repo only
+1. On the app's page, in the left menu click **Install App** → **Install** next to your account.
+2. Choose **Only select repositories** → pick `fsave-storage` → **Install**.
+
+### Part 3 — Cloudflare Worker
+1. Create a free account at <https://dash.cloudflare.com/sign-up> and verify your email. (No card needed for Workers' free plan.)
+2. Install [Node.js](https://nodejs.org) (LTS) if you don't have it.
+3. In a terminal, in this `oauth-worker` folder:
    ```
-4. `wrangler secret put GITHUB_CLIENT_SECRET`, then `wrangler deploy`.
-5. The front end would redirect to `https://github.com/login/oauth/authorize?client_id=…&scope=repo`, then POST the returned `code` to the worker's URL. If you add this, also add the worker URL to `connect-src` in `vite.config.ts`.
+   npx wrangler login
+   ```
+   A browser tab opens → **Allow**.
+4. Copy `wrangler.toml.example` to `wrangler.toml` and put your Client ID in it.
+5. Store the secret (you'll be prompted to paste it; nothing is echoed):
+   ```
+   npx wrangler secret put GITHUB_CLIENT_SECRET
+   ```
+6. Deploy:
+   ```
+   npx wrangler deploy
+   ```
+   The first time, it asks you to pick a free `workers.dev` name. It then prints the worker URL, e.g. `https://fsave-oauth.<name>.workers.dev`.
+
+### Part 4 — Tell the website about it
+In the **fsave-web** repo on GitHub: **Settings → Secrets and variables → Actions → Variables** tab → **New repository variable**, three times (these are public values, not secrets):
+
+| Name | Value |
+|---|---|
+| `VITE_GITHUB_CLIENT_ID` | the Client ID |
+| `VITE_GITHUB_APP_SLUG` | the app slug |
+| `VITE_OAUTH_WORKER_URL` | the worker URL (no trailing slash) |
+
+Then **Actions → Deploy to GitHub Pages → Run workflow** (or push to `main`). The site now shows **Sign in with GitHub**.
+
+## Local testing
+`npm test` covers the worker with a mocked GitHub. `npm run e2e` also drives the full sign-in redirect against a mocked worker.
