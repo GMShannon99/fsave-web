@@ -122,17 +122,17 @@ export function errorFromResponse(
   }
   switch (status) {
     case 401:
-      return new GitHubError('auth', 'GitHub rejected the token: it is invalid, revoked or expired. Create a new one in Settings.', status);
+      return new GitHubError('auth', 'GitHub rejected the sign-in: it is invalid, revoked or expired. Please sign in again.', status);
     case 403:
       return new GitHubError(
         'permission',
-        `The token does not have permission for this action${message ? ` (${message})` : ''}. It needs Contents: read & write on the storage repo.`,
+        `fsave-web does not have permission to do that on your storage${message ? ` (${message})` : ''}. It needs "Contents: read & write" access to your storage folder.`,
         status,
       );
     case 404:
       return new GitHubError(
         'not-found',
-        'Not found. Check the repository name, and that the token is granted access to that repository (GitHub reports inaccessible private repos as 404).',
+        'Your storage folder was not found. Check that it exists and that fsave-web has been given access to it (GitHub reports a folder you cannot access as "not found").',
         status,
       );
     case 409:
@@ -217,6 +217,8 @@ export class GitHubClient {
           headers: this.headers(token, o.accept, o.body !== undefined),
           body: o.body === undefined ? undefined : JSON.stringify(o.body),
           signal: o.signal,
+          // Never reuse a cached answer: GitHub's replies are cacheable for ~60s, which made lists look stale.
+          cache: 'no-store',
         });
       } catch (e) {
         if (o.signal?.aborted || (e as Error)?.name === 'AbortError') throw new GitHubError('abort', 'Cancelled.');

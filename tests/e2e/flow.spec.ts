@@ -53,31 +53,35 @@ test('save → browse → download', async ({ page }) => {
   await page.screenshot({ path: 'screenshots/2-settings-connected.png', fullPage: true });
 
   // Empty state
-  await page.getByRole('link', { name: 'Saves' }).click();
+  await page.getByRole('link', { name: 'My files' }).click();
   await expect(page.getByText('Nothing saved yet.')).toBeVisible();
   await page.screenshot({ path: 'screenshots/3-empty.png', fullPage: true });
 
   // Save a folder
-  await page.getByRole('link', { name: 'New save' }).click();
+  await page.getByRole('link', { name: 'Upload files' }).click();
   await page.getByTestId('pick-folder').setInputFiles(makeFixture());
-  await expect(page.getByText('3 of 5 files selected')).toBeVisible(); // node_modules + .DS_Store excluded
-  await expect(page.getByLabel('Name')).toHaveValue('My Project');
+  await expect(page.getByText('3 files selected')).toBeVisible(); // node_modules + .DS_Store skipped
+  await expect(page.getByLabel('Name')).toHaveValue(/^My Project - /);
+  await page.getByText('Add a note or tags (optional)').click();
   await page.getByLabel(/Tags/).fill('Work, project');
   await page.getByLabel('Note').fill('E2E note');
   await page.screenshot({ path: 'screenshots/4-review.png', fullPage: true });
   const commitsBefore = fake.commitCount();
-  await page.getByRole('button', { name: /Save 3 files/ }).click();
-  await expect(page.getByRole('heading', { name: '✔ Saved' })).toBeVisible();
+  await page.getByRole('button', { name: /Upload 3 files/ }).click();
+  await expect(page.getByRole('heading', { name: /✓ Uploaded 3 files to 'My Project/ })).toBeVisible();
   await page.screenshot({ path: 'screenshots/5-saved.png', fullPage: true });
   expect(fake.commitCount()).toBe(commitsBefore + 1);
 
   // Browse + search
-  await page.getByRole('link', { name: 'Saves' }).click();
-  await expect(page.getByRole('heading', { name: 'My Project' })).toBeVisible();
-  await page.getByLabel('Search saves').fill('nomatch');
-  await expect(page.getByText(/No saves match/)).toBeVisible();
-  await page.getByLabel('Search saves').fill('ünïcode');
+  await page.getByRole('link', { name: 'Back to my files' }).click();
+  await expect(page.getByRole('heading', { name: /My Project/ })).toBeVisible(); // listed right away
   await page.screenshot({ path: 'screenshots/6-browse.png', fullPage: true });
+
+  // Download straight from the list
+  const listDl = page.waitForEvent('download');
+  await page.getByRole('button', { name: /Download My Project/ }).click();
+  expect((await listDl).suggestedFilename()).toMatch(/^My Project.*\.zip$/);
+  await expect(page.getByText('✓ Downloading — check your Downloads folder.')).toBeVisible();
   await page.getByRole('link', { name: /My Project/ }).click();
 
   // Detail + downloads
@@ -86,10 +90,11 @@ test('save → browse → download', async ({ page }) => {
   await page.getByRole('button', { name: 'Expand docs' }).click();
   await page.screenshot({ path: 'screenshots/7-detail.png', fullPage: true });
 
+  await expect(page.getByRole('button', { name: /Download selected/ })).toHaveCount(0); // only after ticking boxes
   const zipDl = page.waitForEvent('download');
-  await page.getByRole('button', { name: 'Download all (zip)' }).click();
+  await page.getByRole('button', { name: 'Download all' }).click();
   const dl = await zipDl;
-  expect(dl.suggestedFilename()).toBe('My Project.zip');
+  expect(dl.suggestedFilename()).toMatch(/^My Project.*\.zip$/);
   const zip = await JSZip.loadAsync(readFileSync(await dl.path()));
   expect(Object.values(zip.files).filter((f) => !f.dir).map((f) => f.name).sort()).toEqual([
     'My Project/docs/data.bin',
@@ -97,7 +102,10 @@ test('save → browse → download', async ({ page }) => {
     'My Project/readme.txt',
   ]);
   expect(await zip.file('My Project/readme.txt')!.async('string')).toBe('hello world\n');
-  await expect(page.getByText(/all 3 files verified/)).toBeVisible();
+  await expect(page.getByText('✓ Downloading — check your Downloads folder.')).toBeVisible();
+
+  await page.getByRole('checkbox', { name: 'Select readme.txt' }).check();
+  await expect(page.getByRole('button', { name: /Download selected \(1,/ })).toBeVisible();
 
   const fileDl = page.waitForEvent('download');
   await page.getByRole('button', { name: 'Download My Project/readme.txt' }).click();

@@ -96,11 +96,13 @@ Then ask GitHub Support to run garbage collection if you need cached objects gon
 
 ## Walkthrough
 
-**Save a folder.** Open the app → **New save** → *Pick folder* (or drag a folder in). Review the tree: `.git/`, `node_modules/`, `.DS_Store`, `Thumbs.db` are unchecked by default; edit exclude patterns or uncheck anything else. Name it, add tags/note, click **Save**. Progress bars show hashing, upload and the commit; a summary lists what was uploaded vs. reused.
+The app guides you; there is also a **Help** page inside it.
 
-**Find it on another computer.** Open the site there, paste a token for the same repo (create one as above) and the repo name, then **Saves**. Search by name, tag or file name; sort by date or size.
-
-**Download as a zip.** Open the save → **Download all (zip)** (or tick files/folders → **Download selected**). Each file is verified against its SHA-256 as it is fetched. Single files have their own **Download** button.
+- **Signing in.** When you're signed out you see only a welcome screen with **Sign in with GitHub**. After signing in you go straight to **My files**. Without the sign-in setup, Settings shows the token form instead.
+- **Upload.** On **My files** click **Upload files** or **Upload a folder** (or drag files onto the Upload page). Three numbered steps: *1. Choose files → 2. Name it → 3. Upload*. The name is pre-filled (first file or folder plus today's date); tags and a note are optional. `.git/`, `node_modules/`, `.DS_Store` and `Thumbs.db` are skipped by default (editable under *Review files* or in Settings). When it finishes you get **Back to my files** / **Upload more**.
+- **Download.** Every save in the list has its own **Download** button (a zip). Inside a save: **Download all**, a **Download** button per file, and **Download selected** once you tick boxes. Each file is checked against its recorded SHA-256 as it is fetched; a mismatch is flagged and listed in `FSAVE-VERIFICATION-FAILED.txt` inside zips.
+- **Delete.** *More options → Delete this save…* asks you to type the save's name. It only removes the cloud copy, never the originals.
+- **Lists are always current.** The browser is told never to reuse cached GitHub answers, and saves/deletes made in this browser are applied to the list immediately.
 
 ## Development
 
@@ -112,6 +114,6 @@ npm run e2e          # Playwright save -> browse -> download flow against a mock
 npm run build        # type-check + production bundle in dist/
 ```
 
-Layout: `src/api/github.ts` (REST client, errors, rate limiting) · `src/storage/` (manifest, excludes, paths, hashing, commit builder, save/delete, zip) · `src/ui/` (Preact screens) · `src/workers/hash.ts` (hashing worker) · `tests/support/fakeGithub.ts` (in-memory GitHub used by both test suites) · `src/auth/` (sign-in session, refresh, repo connect) · `oauth-worker/` (optional sign-in worker).
+Layout: `src/api/github.ts` (REST client, errors, rate limiting) · `src/storage/` (manifest, excludes, paths, hashing, commit builder, save/delete, zip) · `src/ui/` (Preact screens: Welcome, Browse = My files, NewSave = Upload, Detail, Help, Settings) · `src/workers/hash.ts` (hashing worker) · `tests/support/fakeGithub.ts` (in-memory GitHub used by both test suites) · `src/auth/` (sign-in session, refresh, repo connect) · `oauth-worker/` (optional sign-in worker).
 
 Browsers: current Chrome, Edge, Firefox, Safari. Folder picking uses `<input webkitdirectory>` and is hidden on phones/tablets (drag-and-drop of folders also works on desktop).

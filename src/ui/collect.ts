@@ -51,3 +51,16 @@ export function defaultName(items: Picked[]): string {
   if (hasFolder && roots.size === 1) return [...roots][0];
   return items.length === 1 ? items[0].path : `${items.length} files`;
 }
+
+/** Folder picking works on desktop browsers only (not phones/tablets). */
+export const canPickFolder = () =>
+  typeof document !== 'undefined' &&
+  'webkitdirectory' in document.createElement('input') &&
+  !/Android|iPhone|iPad|iPod/i.test(navigator.userAgent);
+
+/** A friendly default name: what was picked, plus today's date. */
+export function suggestName(items: Picked[], now = new Date()): string {
+  const base = defaultName(items);
+  if (!base) return '';
+  return `${base} - ${now.toLocaleDateString('en-US', { year: 'numeric', month: 'short', day: 'numeric' })}`;
+}

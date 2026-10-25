@@ -6,13 +6,16 @@ import { basename, buildTree, formatBytes, safeFileName } from '../storage/paths
 import { deleteSave, loadManifest, updateSave } from '../storage/repoOps';
 import type { Manifest, ManifestFile } from '../storage/types';
 import { useApp } from './app';
+import { DOWNLOAD_STARTED, bigWarning } from './downloadSave';
 import { FileTree } from './FileTree';
+import { noteDeleted } from './recent';
 
 export function Detail({ id }: { id: string }) {
   const { client, branch, settings } = useApp();
   const [m, setM] = useState<Manifest | null>(null);
   const [error, setError] = useState('');
   const [info, setInfo] = useState('');
+  // Nothing is ticked at first; "Download selected" only appears once something is.
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [verify, setVerify] = useState<Record<string, boolean>>({});
   const [busy, setBusy] = useState('');
@@ -26,7 +29,6 @@ export function Detail({ id }: { id: string }) {
     loadManifest(client!, branch, id, ctl.signal).then(
       (mf) => {
         setM(mf);
-        setSelected(new Set(mf.files.map((f) => f.path)));
         setForm({ name: mf.name, tags: mf.tags.join(', '), note: mf.note });
       },
       (e) => !ctl.signal.aborted && setError(describeError(e)),
@@ -35,7 +37,7 @@ export function Detail({ id }: { id: string }) {
   }, [client, branch, id]);
 
   const tree = useMemo(() => buildTree(m?.files ?? []), [m]);
-  if (error) return <section><p role="alert" class="notice error">{error}</p><a href="#/">← Back to saves</a></section>;
+  if (error && !m) return <section><p role="alert" class="notice error">{error}</p><a href="#/">← Back to my files</a></section>;
   if (!m) return <section><p class="muted" role="status">Loading…</p></section>;
 
   const chosen = m.files.filter((f) => selected.has(f.path));
@@ -60,28 +62,28 @@ export function Detail({ id }: { id: string }) {
       const r = await fetchVerified(client!, f);
       setVerify((v) => ({ ...v, [f.path]: r.verified }));
       triggerDownload(new Blob([r.data]), basename(f.path));
-      if (!r.verified) setError(`⚠ ${f.path} does NOT match its recorded SHA-256. It was downloaded, but may be corrupted.`);
-      else setInfo(`Downloaded ${f.path} (SHA-256 verified).`);
+      if (!r.verified) setError(`⚠ ${f.path} may be damaged. It was downloaded anyway, but it might not open properly.`);
+      else setInfo(DOWNLOAD_STARTED);
     });
 
   const downloadZip = (files: ManifestFile[], suffix: string) => {
     const bytes = files.reduce((s, f) => s + f.size, 0);
-    if (bytes > ZIP_WARN_BYTES && !confirm(`This zip is ${formatBytes(bytes)}. It is built in memory in your browser and may fail or be slow. Continue?`)) return;
-    return run('Building zip…', async () => {
-      const { blob, failed } = await buildZip(client!, m, files, { onProgress: (d, t) => setBusy(`Fetching ${d}/${t} files…`) });
+    if (bytes > ZIP_WARN_BYTES && !confirm(bigWarning(bytes))) return;
+    return run('Getting your files ready…', async () => {
+      const { blob, failed } = await buildZip(client!, m, files, { onProgress: (d, t) => setBusy(`Getting your files ready… ${d} of ${t}`) });
       setVerify((v) => ({ ...v, ...Object.fromEntries(files.map((f) => [f.path, !failed.includes(f.path)])) }));
       triggerDownload(blob, `${safeFileName(m.name)}${suffix}.zip`);
-      if (failed.length) setError(`⚠ ${failed.length} file(s) failed SHA-256 verification (listed in FSAVE-VERIFICATION-FAILED.txt inside the zip): ${failed.slice(0, 5).join(', ')}${failed.length > 5 ? '…' : ''}`);
-      else setInfo(`Zip downloaded; all ${files.length} files verified against their SHA-256.`);
+      if (failed.length) setError(`⚠ ${failed.length} file(s) may be damaged: ${failed.slice(0, 5).join(', ')}${failed.length > 5 ? '…' : ''}. Everything was downloaded anyway; a note inside the zip lists them.`);
+      else setInfo(DOWNLOAD_STARTED);
     });
   };
 
   const copyLink = async () => {
     try {
       await navigator.clipboard.writeText(shareUrl);
-      setInfo('Link copied. Whoever opens it needs their own token with access to your storage repo.');
+      setInfo('Link copied. It works on your own computers once you are signed in.');
     } catch {
-      prompt('Copy this link (viewers need their own token for the storage repo):', shareUrl);
+      prompt('Copy this link (it works on your own computers once you are signed in):', shareUrl);
     }
   };
 
@@ -90,61 +92,43 @@ export function Detail({ id }: { id: string }) {
       const updated = await updateSave(client!, branch, m.id, { name: form.name, tags: parseTags(form.tags), note: form.note });
       setM(updated);
       setEditing(false);
-      setInfo('Saved.');
+      setInfo('✓ Changes saved.');
     });
 
   const doDelete = () =>
     run('Deleting…', async () => {
       const r = await deleteSave(client!, branch, m.id);
-      sessionStorage.setItem('fsave.flash', r.releaseError ? `Deleted, but the release could not be removed: ${r.releaseError}` : 'Deleted.');
+      noteDeleted(m.id);
+      sessionStorage.setItem('fsave.flash', r.releaseError ? `Deleted “${m.name}”, but some large files could not be removed: ${r.releaseError}` : `✓ Deleted “${m.name}”.`);
       location.hash = '#/';
     });
 
   return (
     <section>
-      <p><a href="#/">← All saves</a></p>
+      <p><a href="#/">← My files</a></p>
       <h1>{m.name}</h1>
       <p class="muted">
-        {new Date(m.createdAt).toLocaleString()} · {m.files.length} files · {formatBytes(m.totalSize)} · from {m.source.device}
+        {new Date(m.createdAt).toLocaleDateString(undefined, { year: 'numeric', month: 'short', day: 'numeric' })} · {m.files.length} file{m.files.length === 1 ? '' : 's'} · {formatBytes(m.totalSize)} · from {m.source.device}
         {m.updatedAt ? ` · edited ${new Date(m.updatedAt).toLocaleDateString()}` : ''}
       </p>
       {m.tags.length > 0 && <p class="tags">{m.tags.map((t) => <span class="tag" key={t}>{t}</span>)}</p>}
       {m.note && <p class="note">{m.note}</p>}
 
       <div class="actions">
-        <button type="button" class="primary" disabled={!!busy} onClick={() => downloadZip(m.files, '')}>Download all (zip)</button>
-        <button type="button" disabled={!!busy || chosen.length === 0 || chosen.length === m.files.length} onClick={() => downloadZip(chosen, '-selection')}>
-          Download selected ({chosen.length}, {formatBytes(chosenBytes)})
-        </button>
-        <button type="button" onClick={copyLink}>Copy share link</button>
-        <button type="button" onClick={() => setEditing(!editing)}>Edit</button>
-        <button type="button" class="danger-btn" onClick={() => setDeleting(!deleting)}>Delete…</button>
+        <button type="button" class="primary big" disabled={!!busy} onClick={() => downloadZip(m.files, '')}>⬇ Download all</button>
+        {chosen.length > 0 && (
+          <button type="button" class="big" disabled={!!busy} onClick={() => downloadZip(chosen, '-selection')}>
+            Download selected ({chosen.length}, {formatBytes(chosenBytes)})
+          </button>
+        )}
       </div>
-      <p class="muted">Share links only work for people who have their own token with access to <code>{settings.repo}</code>.</p>
 
       {busy && <p role="status" class="notice">{busy}</p>}
       {info && <p role="status" class="notice ok">{info}</p>}
       {error && <p role="alert" class="notice error">{error}</p>}
 
-      {editing && (
-        <form class="card" onSubmit={(e) => { e.preventDefault(); void saveEdit(); }}>
-          <label>Name<input required value={form.name} onInput={(e) => setForm({ ...form, name: (e.target as HTMLInputElement).value })} /></label>
-          <label>Tags<input value={form.tags} onInput={(e) => setForm({ ...form, tags: (e.target as HTMLInputElement).value })} /></label>
-          <label>Note<textarea rows={3} value={form.note} onInput={(e) => setForm({ ...form, note: (e.target as HTMLTextAreaElement).value })} /></label>
-          <div class="actions"><button class="primary" type="submit" disabled={!!busy}>Save changes</button><button type="button" onClick={() => setEditing(false)}>Cancel</button></div>
-        </form>
-      )}
-
-      {deleting && (
-        <div class="card danger">
-          <h2>Delete this save?</h2>
-          <p>This removes the save's folder from the storage repo in one commit{m.releaseTag ? ' and deletes its release (large files)' : ''}. <strong>Git history still contains the deleted files</strong> — anyone with repo access can recover them from earlier commits. See the README for how to purge history.</p>
-          <label>Type <code>{m.name}</code> to confirm<input value={typed} onInput={(e) => setTyped((e.target as HTMLInputElement).value)} /></label>
-          <button type="button" class="danger-btn" disabled={typed !== m.name || !!busy} onClick={doDelete}>Delete permanently</button>
-        </div>
-      )}
-
       <h2>Files</h2>
+      <p class="hint">Click <strong>Download</strong> next to a file, or tick the boxes to download only some of them.</p>
       <FileTree
         nodes={tree}
         selected={selected}
@@ -157,13 +141,45 @@ export function Detail({ id }: { id: string }) {
         }
         leaf={(f: ManifestFile & { path: string }) => (
           <>
-            <span class="muted meta">{formatBytes(f.size)}{f.storage === 'release' ? ' · release' : ''}</span>
-            {verify[f.path] === true && <span class="ok" title="SHA-256 verified">✓</span>}
-            {verify[f.path] === false && <span class="bad" role="img" aria-label="SHA-256 mismatch" title="SHA-256 mismatch">⚠</span>}
+            <span class="muted meta">{formatBytes(f.size)}{f.storage === 'release' ? ' · large file' : ''}</span>
+            {verify[f.path] === true && <span class="ok" title="Checked: matches what was uploaded">✓</span>}
+            {verify[f.path] === false && <span class="bad" role="img" aria-label="May be damaged" title="May be damaged">⚠</span>}
             <button type="button" class="link" disabled={!!busy} onClick={() => downloadOne(f)} aria-label={`Download ${f.path}`}>Download</button>
           </>
         )}
       />
+
+      <details class="more">
+        <summary>More options</summary>
+        <div class="actions">
+          <button type="button" onClick={() => setEditing(!editing)}>Rename or add a note</button>
+          <button type="button" onClick={copyLink}>Copy link</button>
+          <button type="button" class="danger-btn" onClick={() => setDeleting(!deleting)}>Delete this save…</button>
+        </div>
+        <p class="muted">The link is for your own computers. Other people can't open it unless you give them access to your storage on GitHub.</p>
+
+        {editing && (
+          <form class="card" onSubmit={(e) => { e.preventDefault(); void saveEdit(); }}>
+            <label>Name<input required value={form.name} onInput={(e) => setForm({ ...form, name: (e.target as HTMLInputElement).value })} /></label>
+            <label>Tags (separate with commas)<input value={form.tags} onInput={(e) => setForm({ ...form, tags: (e.target as HTMLInputElement).value })} /></label>
+            <label>Note<textarea rows={3} value={form.note} onInput={(e) => setForm({ ...form, note: (e.target as HTMLTextAreaElement).value })} /></label>
+            <div class="actions"><button class="primary" type="submit" disabled={!!busy}>Save changes</button><button type="button" onClick={() => setEditing(false)}>Cancel</button></div>
+          </form>
+        )}
+
+        {deleting && (
+          <div class="card danger">
+            <h2>Delete this save?</h2>
+            <p>This deletes the copy in your cloud storage. <strong>The original files on your computer are not affected.</strong></p>
+            <details>
+              <summary>For privacy experts</summary>
+              <p class="muted">GitHub keeps older versions of your storage. After deleting, someone with access to your storage on GitHub could still recover the files from its history. The README explains how to remove them completely.</p>
+            </details>
+            <label>To confirm, type <code>{m.name}</code><input value={typed} onInput={(e) => setTyped((e.target as HTMLInputElement).value)} /></label>
+            <button type="button" class="danger-btn" disabled={typed !== m.name || !!busy} onClick={doDelete}>Delete permanently</button>
+          </div>
+        )}
+      </details>
     </section>
   );
 }

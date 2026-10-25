@@ -7,8 +7,10 @@ import { AuthManager, authorizeUrl, newState, parseCallback, rememberState, type
 import { loadSettings, loadToken, parseRepo, saveSettings, saveToken, type Settings } from '../storage/config';
 import { Browse } from './Browse';
 import { Detail } from './Detail';
+import { Help } from './Help';
 import { NewSave } from './NewSave';
 import { SettingsPage } from './SettingsPage';
+import { Welcome } from './Welcome';
 
 export interface Ctx {
   settings: Settings;
@@ -37,7 +39,7 @@ export interface OAuthState {
 }
 
 export interface Route {
-  page: 'browse' | 'new' | 'save' | 'settings';
+  page: 'browse' | 'new' | 'save' | 'settings' | 'help';
   id?: string;
   repo?: string;
 }
@@ -48,6 +50,7 @@ export function parseHash(hash: string): Route {
   const parts = path.split('/').filter(Boolean);
   if (parts[0] === 'new') return { page: 'new' };
   if (parts[0] === 'settings') return { page: 'settings', repo };
+  if (parts[0] === 'help') return { page: 'help' };
   if (parts[0] === 'save' && parts[1]) return { page: 'save', id: decodeURIComponent(parts[1]), repo };
   return { page: 'browse' };
 }
@@ -190,13 +193,17 @@ export function App() {
   }, [settings, tok, session, oauth, expired]);
 
   const configured = !!ctx.client;
+  // With sign-in available, being signed out shows the plain welcome screen (never Settings).
+  const welcome = !configured && ctx.oauth.enabled && route.page !== 'settings';
   useEffect(() => {
-    if (!configured) setSticky(true);
+    if (!configured && !ctx.oauth.enabled) setSticky(true);
   }, [configured]);
   let page: ComponentChildren;
-  if (route.page === 'settings' || !configured || sticky) page = <SettingsPage firstRun={!configured} />;
+  if (welcome) page = <Welcome />;
+  else if (route.page === 'settings' || !configured || sticky) page = <SettingsPage firstRun={!configured} />;
   else if (route.page === 'new') page = <NewSave />;
   else if (route.page === 'save') page = <Detail id={route.id!} key={route.id} />;
+  else if (route.page === 'help') page = <Help />;
   else page = <Browse />;
 
   const nav = (p: Route['page'], href: string, label: string) => (
@@ -207,16 +214,19 @@ export function App() {
 
   return (
     <AppCtx.Provider value={ctx}>
-      <header class="top">
-        <a class="brand" href="#/">
-          <span aria-hidden="true">💾</span> fsave-web
-        </a>
-        <nav aria-label="Main">
-          {nav('browse', '#/', 'Saves')}
-          {nav('new', '#/new', 'New save')}
-          {nav('settings', '#/settings', 'Settings')}
-        </nav>
-      </header>
+      {!welcome && (
+        <header class="top">
+          <a class="brand" href="#/">
+            <span aria-hidden="true">💾</span> fsave-web
+          </a>
+          <nav aria-label="Main">
+            {nav('browse', '#/', 'My files')}
+            {nav('new', '#/new', 'Upload files')}
+            {nav('help', '#/help', 'Help')}
+            {nav('settings', '#/settings', 'Settings')}
+          </nav>
+        </header>
+      )}
       <main>{page}</main>
     </AppCtx.Provider>
   );
