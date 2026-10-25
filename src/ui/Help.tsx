@@ -34,8 +34,19 @@ export function Help() {
         <h2>Using a new computer</h2>
         <ol>
           <li>Open this website and click <strong>Sign in with GitHub</strong>. Use the same GitHub account as before. Your files appear right away.</li>
-          <li>GitHub may email you a code to check it's really you. If it doesn't arrive in a minute or two, look in your <strong>spam</strong> folder, then ask GitHub to send it again.</li>
-          <li>If GitHub asks for a two-step code and you don't have your phone, use one of your <strong>recovery codes</strong> (GitHub gave you a set when you turned on two-step sign-in). They're a last resort, so keep them somewhere safe.</li>
+          <li>GitHub may ask for a <strong>verification code</strong> to check it's really you. <strong>That code comes from GitHub, not from fsave-web</strong>, and fsave-web never sees it.</li>
+          <li>This only happens on a new computer, or after you click <strong>Sign out</strong>. Otherwise this computer remembers you.</li>
+        </ol>
+      </div>
+
+      <div class="card">
+        <h2>The verification code didn't arrive</h2>
+        <ol>
+          <li>Check your <strong>spam</strong> or junk folder.</li>
+          <li>Make sure you're looking in the right inbox. GitHub sends the code to the email address on your GitHub account, which may not be the one you check most.</li>
+          <li>Wait a minute or two, then click <strong>Resend</strong> on the GitHub page.</li>
+          <li>Better: approve with <strong>GitHub Mobile</strong> (one tap on your phone) or a <strong>passkey</strong> (your fingerprint, face or PIN). On the GitHub page, look for <strong>Use GitHub Mobile</strong> or <strong>Use a passkey</strong> instead of the email code.</li>
+          <li>Last resort: use one of your <strong>recovery codes</strong> (GitHub gave you a set when you turned on two-step sign-in). Keep them somewhere safe, and get a fresh set from GitHub after you use any.</li>
         </ol>
       </div>
 

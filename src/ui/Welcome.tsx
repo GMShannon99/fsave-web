@@ -18,7 +18,7 @@ export function Welcome() {
           {oauth.state === 'error' && <p role="alert" class="notice error">{oauth.message}</p>}
           <button type="button" class="primary big" onClick={signIn}>Sign in with GitHub</button>
           <p class="muted fine">
-            You'll sign in with your GitHub account (GMShannon99). On a new computer GitHub may email you a code — check your spam folder if it doesn't arrive.
+            You'll sign in with your GitHub account (GMShannon99). On a new computer, GitHub (not fsave-web) may ask for a verification code. If the email doesn't arrive, check your spam folder, or approve it in the GitHub Mobile app on your phone. After that, this computer remembers you. <a href="#/help">More help</a>
           </p>
         </>
       )}

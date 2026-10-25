@@ -24,7 +24,7 @@ test('welcome screen shows only the sign-in button and a short note', async ({ p
   await expect(page.getByRole('heading', { name: 'fsave-web' })).toBeVisible();
   await expect(page.getByText('Save files to your private cloud and get them back from any computer.')).toBeVisible();
   await expect(page.getByRole('button', { name: 'Sign in with GitHub' })).toBeVisible();
-  await expect(page.getByText(/GMShannon99\)\. On a new computer GitHub may email you a code — check your spam folder/)).toBeVisible();
+  await expect(page.getByText(/GMShannon99\)\. On a new computer, GitHub \(not fsave-web\) may ask for a verification code.*check your spam folder.*GitHub Mobile/)).toBeVisible();
   // Nothing else: no menu, no token box, no technical words.
   await expect(page.getByRole('navigation')).toHaveCount(0);
   await expect(page.getByLabel('Token')).toHaveCount(0);
@@ -124,12 +124,14 @@ test('help page explains the basics in plain words', async ({ page }) => {
   await seedSignedIn(page, fake);
   await page.goto('/#/');
   await page.getByRole('link', { name: 'Help' }).click();
-  for (const h of ['Upload files', 'Download files', 'Delete a save', 'Using a new computer']) {
+  for (const h of ['Upload files', 'Download files', 'Delete a save', 'Using a new computer', "The verification code didn't arrive"]) {
     await expect(page.getByRole('heading', { name: h })).toBeVisible();
   }
   await expect(page.getByText('Deleting here never deletes the original files on your computer.')).toBeVisible();
   await expect(page.getByText(/spam/).first()).toBeVisible();
-  await expect(page.getByText(/recovery codes/)).toBeVisible();
+  await expect(page.getByText(/recovery codes/).first()).toBeVisible();
+  await expect(page.getByText(/comes from GitHub, not from fsave-web/)).toBeVisible();
+  await expect(page.getByText(/GitHub Mobile/).first()).toBeVisible();
 });
 
 test('settings: sign out is easy to find; technical settings are at the very bottom', async ({ page }) => {
